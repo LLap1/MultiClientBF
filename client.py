@@ -1,16 +1,16 @@
-import sys
-
-from mysocket import MySocket
+from Abstract.Isocket import MySocket
 import socket
 import os
+from mythread import MyThread
 from brute_forcer import Brute_forcer
 from threading import Thread
+from myhash import MyHash
 
 
 class Client(MySocket):
     def __init__(self, ip, port):
         super().__init__(ip, port)
-        self._total_threads = int(os.cpu_count())
+        self._total_threads = int(os.cpu_count()) - 1  # 1 additional thread to listen for kill switch
 
     def connect(self):  # connecting to host
         try:
@@ -21,11 +21,11 @@ class Client(MySocket):
         print(f"[+] connected to {self._ip}:{self._port}")
 
         # send thread count:
-        data = f"THREADS:{self._total_threads}".encode()
-        self._socket.send(data)
+        data = f"THREADS:{self._total_threads}"
+        self._send(data)
 
         # starting listening thread
-        Thread(target=self._listen).start()
+        MyThread(self._listen).start()
 
     def _listen(self):  # listening for incoming data
         while 1:
@@ -35,31 +35,33 @@ class Client(MySocket):
                 print("Server:", code, value)
                 match code:
                     case "HASH":
-                        self._myhash.hash = value[0]
-                        self._myhash.length= int(value[1])
-                        self._brute_forcer= Brute_forcer(self._myhash, self._total_threads)
-
+                        _hash = value[0]
+                        length = int(value[1])
+                        alg = str(value[2])
+                        self._myhash = MyHash(_hash, alg, length)
                     case "START":
                         # the range to brute force given to the client:
-                        self._brute_forcer.start = int(value[0])
-                        self._brute_forcer.end = int(value[1])
-                        print(f"[!] Starting to brute force!!!")
+                        jobs_per_client = int(value[0])
+                        charset = value[1]
+                        self._brute_forcer = Brute_forcer(
+                            self._myhash, self._total_threads, charset, jobs_per_client
+                        )
+                        print(f"[!] Starting to bruteforce: {self._myhash}")
                         self._brute_forcer.run()
-                        self._get_result()
-                        break
+                        MyThread(self._get_result).start()
 
+                    case "STOP":
+                        self._brute_forcer.stop()
 
     def _get_result(self):
-        while not self._myhash.is_cracked:
+        while self._myhash.plain_text == '':
             pass
-        data = self._myhash.plain_text
-        if data == '':
-            self._send("NOTFOUND:", self._socket)
-        else:
-            self._send("FOUND:" + data, self._socket)
+        self._send("FOUND:" + self._myhash.plain_text)
 
-        print(data)
-
+    # properties:
+    @property
+    def total_threads(self):
+        return self._total_threads
 
 
 def initiate(c_socket):  # initiating the two sockets on different threads
@@ -67,8 +69,8 @@ def initiate(c_socket):  # initiating the two sockets on different threads
 
 
 if __name__ == '__main__':
-    c_socket1 = Client("127.0.0.1", 8090)
+    # c_socket1 = Client("127.0.0.1", 8090)
     c_socket2 = Client("127.0.0.1", 8090)
 
-    t1 = Thread(target=initiate, args=(c_socket1,)).start()
+    # t1 = Thread(target=initiate, args=(c_socket1,)).start()
     t2 = Thread(target=initiate, args=(c_socket2,)).start()
